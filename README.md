@@ -62,10 +62,9 @@ versa. `ECONT_BASE_URL` is therefore **required** when `ECONT_MODE=live`, with n
 default: a live deploy missing it would otherwise quote demo tariffs as if they
 were the contract's, silently.
 
-Nothing here creates a shipment. `calculateShipping()` is the only call that
-posts to `Shipments/`, always with `mode: 'calculate'`; `mode: 'create'` exists in
-the type union and at no call site. Live credentials price parcels, they do not
-spend money.
+Nothing here creates a shipment at quote time. `calculateShipping()` posts to
+`Shipments/` with `mode: 'calculate'`. `createShipment()` uses `mode: 'create'`
+only after Stripe has marked the order paid (see the webhook).
 
 **Some sandboxed environments block `*.econt.com`.** Claude Code's web sandbox,
 for instance, returns `403` to the proxy `CONNECT`:
@@ -104,12 +103,14 @@ API on a preview deploy before launch.
 |---|---|
 | `lib/econt/client.ts` | HTTP, Basic auth, timeouts, error mapping |
 | `lib/econt/nomenclatures.ts` | cities, offices, streets, quarters → client-safe DTOs |
-| `lib/econt/shipping.ts` | the delivery quote (`createLabel` `mode: 'calculate'`) |
+| `lib/econt/shipping.ts` | delivery quote (`calculate`) and paid label (`create`) |
 | `lib/econt/dto.ts` | the only Econt types the browser sees |
 | `lib/econt/fixtures/` | offline data, including the awkward cases |
 | `lib/order/schema.ts` | validation both the browser and the API run |
-| `lib/order/submit-order.ts` | where an order becomes real — the DB/Stripe seam |
+| `lib/order/submit-order.ts` | persist the order for the signed-in user |
+| `lib/order/fulfill.ts` | email + Econt label after `checkout.session.completed` |
 | `app/api/econt/*`, `app/api/order` | the routes |
+| `app/api/stripe/webhook` | Stripe fulfillment |
 | `components/site/checkout/` | the form UI, driven by `order-reducer.ts` |
 
 Two boundaries worth not eroding:
@@ -121,9 +122,21 @@ Two boundaries worth not eroding:
   component.** The rest starts with `import 'server-only'`, so a mistake is a
   build error rather than a leaked password.
 
-Orders are currently written to the logs only — `order.received` for the shape
-and money, `order.contact` for personal data, split so the second can be dropped
-or routed separately. Both are replaced by the database write in the next phase.
+Orders require a logged-in Supabase user. `POST /api/order` creates (or reuses)
+a Stripe Customer, writes `application_orders`, and returns a hosted Checkout
+URL (EUR, card). Payment is confirmed only by `POST /api/stripe/webhook`. After
+`paid`, we send email (Resend, if configured) and attempt an Econt label.
+
+Set the Stripe Dashboard webhook to `https://<production-domain>/api/stripe/webhook`
+(not a Supabase Edge Function). Locally: `stripe listen --forward-to localhost:3000/api/stripe/webhook`.
+
+Apply `supabase/migrations/20260908120000_orders_user_and_fulfillment.sql` on
+the live project before taking the first paid order. `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` must be set on Vercel — the public anon pair is not
+enough to write orders.
+
+If Vercel Deployment Protection is on, allow Stripe to POST `/api/stripe/webhook`
+or webhooks will 401 and orders stay unpaid.
 
 ### Checks
 

@@ -24,6 +24,7 @@ type ModalState =
   | { kind: 'closed' }
   | { kind: 'contact'; model: ModelId }
   | { kind: 'auth'; pendingModel: ModelId }
+  | { kind: 'awaiting-session'; pendingModel: ModelId }
 
 /**
  * Owns both the contact/order modal and the auth modal.
@@ -41,19 +42,27 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
     (selected: ModelId = 'standard') => {
       triggerRef.current = document.activeElement as HTMLElement | null
 
-      if (session) {
+      if (loading) {
+        setModalState({ kind: 'awaiting-session', pendingModel: selected })
+      } else if (session) {
         setModalState({ kind: 'contact', model: selected })
       } else {
         setModalState({ kind: 'auth', pendingModel: selected })
       }
     },
-    [session],
+    [session, loading],
   )
 
-  // Once auth finishes loading and the user has a session, if the auth modal
-  // was open, switch to the contact modal with the pending model.
   useEffect(() => {
     if (loading) return
+    if (modalState.kind === 'awaiting-session') {
+      setModalState(
+        session
+          ? { kind: 'contact', model: modalState.pendingModel }
+          : { kind: 'auth', pendingModel: modalState.pendingModel },
+      )
+      return
+    }
     if (session && modalState.kind === 'auth') {
       setModalState({ kind: 'contact', model: modalState.pendingModel })
     }

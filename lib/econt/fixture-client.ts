@@ -116,7 +116,10 @@ function priceLabel(req: CreateLabelRequest): CreateLabelResponse {
       senderDueAmount: 0,
       receiverDueAmount: round2(total + cdAmount),
       ...(req.mode === 'create'
-        ? { shipmentNumber: `105${Math.floor(Math.random() * 9_000_000 + 1_000_000)}` }
+        ? {
+            shipmentNumber: `105${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`,
+            pdfURL: 'https://ee.econt.com/label-fixture.pdf',
+          }
         : {}),
     },
   }

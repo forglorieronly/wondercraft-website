@@ -59,8 +59,6 @@ export type Plan = {
   /** Packed parcel used for the Econt delivery quote. */
   parcel: Parcel
   sku: string
-  /** Stripe price ID for one-time checkout. Replace with real IDs from Stripe dashboard. */
-  stripePriceId: string
 }
 
 export const plans: Plan[] = [
@@ -83,7 +81,6 @@ export const plans: Plan[] = [
     priceEurCents: 3000,
     parcel: PACKED_PARCEL,
     sku: 'WC-STD-01',
-    stripePriceId: 'price_standard_placeholder',
   },
   {
     id: 'custom',
@@ -104,7 +101,6 @@ export const plans: Plan[] = [
     priceEurCents: 4000,
     parcel: PACKED_PARCEL,
     sku: 'WC-CUS-01',
-    stripePriceId: 'price_custom_placeholder',
   },
 ]
 
