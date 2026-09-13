@@ -18,6 +18,7 @@ import {
   orderReducer,
   toOrderDraft,
 } from './checkout/order-reducer'
+import { useAuth } from './auth-context'
 import { AlertIcon, CheckIcon, SpinnerIcon } from './icons'
 import { Field } from './field'
 import { ModalShell, useModalShell } from './modal-shell'
@@ -32,6 +33,7 @@ export function ContactModal({
   initialModel: PlanId
   onClose: () => void
 }) {
+  const { user } = useAuth()
   const firstFieldRef = useRef<HTMLInputElement>(null)
   const [state, dispatch] = useReducer(orderReducer, initialModel, initialOrderState)
 
@@ -43,10 +45,14 @@ export function ContactModal({
 
   useShippingQuote(state, dispatch)
 
-  // Move focus into the dialog on open.
   useEffect(() => {
     firstFieldRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    const email = user?.email?.trim().toLowerCase()
+    if (email) dispatch({ type: 'setText', field: 'email', value: email })
+  }, [user?.email])
 
   // Validate the field the customer just left, so a bad phone or a missing
   // surname surfaces where it was typed rather than after the whole form is
@@ -138,7 +144,7 @@ export function ContactModal({
               {submitting ? 'Изпращаме…' : 'Поръчай сега'}
             </button>
             <p className="mt-3 text-center text-sm text-charcoal-soft">
-              Ще се свържем с вас, за да потвърдим детайлите.
+              Плащането е със карта през Stripe.
             </p>
           </div>
         )
@@ -209,7 +215,11 @@ export function ContactModal({
               </Field>
             </div>
 
-            <Field label="Имейл" error={errors.email}>
+            <Field
+              label="Имейл"
+              error={errors.email}
+              hint="Имейлът на профила ви. Потвърждението за плащане отива тук."
+            >
               {({ describedBy, hasError }) => (
                 <input
                   name="email"
@@ -217,14 +227,11 @@ export function ContactModal({
                   inputMode="email"
                   autoComplete="email"
                   maxLength={LIMITS.email}
-                  className="modal-input"
+                  className="modal-input bg-mist"
                   value={state.email}
+                  readOnly
                   aria-invalid={hasError || undefined}
                   aria-describedby={describedBy}
-                  onBlur={() => handleBlur('email')}
-                  onChange={(e) =>
-                    dispatch({ type: 'setText', field: 'email', value: e.target.value })
-                  }
                 />
               )}
             </Field>

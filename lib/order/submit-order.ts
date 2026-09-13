@@ -35,15 +35,18 @@ export type AcceptedOrder = {
 /**
  * Accept an order.
  *
- * The single place an order becomes real, and the seam the next phases plug
- * into: persistOrder() becomes a database write, and a Stripe PaymentIntent
- * slots in between pricing and persistence. Everything before that point —
- * validation, authoritative pricing — already happens here, so those changes are
- * additive rather than a rewrite.
+ * The single place an order becomes real: re-price, persist, then the route
+ * creates a Stripe Checkout Session for this logged-in user.
  */
+export type SubmitOrderAuth = {
+  userId: string
+  stripeCustomerId: string
+}
+
 export async function submitOrder(
   input: OrderInput,
   context: OrderContext,
+  auth: SubmitOrderAuth,
 ): Promise<AcceptedOrder> {
   const plan = findPlan(input.planId)
   if (!plan) throw new Error(`Unknown plan ${input.planId}`)
@@ -62,10 +65,13 @@ export async function submitOrder(
     streetIsFreeform: input.delivery.streetIsFreeform,
   }
 
-  // Recompute rather than trust the browser's total. If Econt is unreachable the
-  // order still goes through with the delivery price unset — this business
-  // already confirms every order by phone, so refusing the sale because a third
-  // party is down would lose a customer for nothing.
+  // Recompute rather than trust the browser's total.
+  //
+  // A failure here leaves shipping null, and the route refuses to open Checkout
+  // on that. This used to charge the product price alone and silently absorb the
+  // courier cost on every order — which is the one way to lose more than the
+  // sale. The order is still recorded (as needs_quote) so the shop can call with
+  // a price, so the sale is deferred rather than turned away.
   let shipping: Money | null = null
   let quoteId: string | null = null
   if (context.city) {
@@ -87,18 +93,12 @@ export async function submitOrder(
   const total = shipping ? addMoney(product, shipping) : product
   const orderRef = makeOrderRef()
 
-  await persistOrder({ orderRef, input, context, product, shipping, total, quoteId })
+  await persistOrder({ orderRef, input, context, product, shipping, total, quoteId, auth })
   await notifyOrder({ orderRef, input, total })
 
   return { orderRef, plan, product, shipping, total, quoteId }
 }
 
-/**
- * TODO(next phase): write to the database.
- *
- * Until then the order lives only in the logs, which is why the reference is
- * printed and shown to the customer — it is the one handle a phone call can use.
- */
 async function persistOrder(record: {
   orderRef: string
   input: OrderInput
@@ -107,10 +107,13 @@ async function persistOrder(record: {
   shipping: Money | null
   total: Money
   quoteId: string | null
+  auth: SubmitOrderAuth
 }): Promise<void> {
-  const { orderRef, input, context } = record
+  const { orderRef, input, context, auth } = record
   const { error } = await getSupabaseAdmin().from('application_orders').insert({
     order_ref: orderRef,
+    user_id: auth.userId,
+    stripe_customer_id: auth.stripeCustomerId,
     plan_id: input.planId,
     customer_name: input.name,
     email: input.email,
@@ -138,12 +141,16 @@ async function persistOrder(record: {
     product_amount: record.product.cents,
     shipping_amount: record.shipping?.cents ?? null,
     total_amount: record.total.cents,
-    currency: record.total.currency,
+    currency: 'eur',
+    // An unpriced shipment never reaches Stripe (see app/api/order/route.ts), so
+    // it must not sit in the queue looking like an order awaiting payment. The
+    // lead is still worth keeping — someone has to ring them back with a price.
+    status: record.shipping ? 'pending_payment' : 'needs_quote',
   })
   if (error) throw new Error(`Could not persist order: ${error.message}`)
 }
 
-/** TODO(next phase): email the shop, and confirm to the customer. */
+/** Email and Econt label run from the Stripe webhook after payment, not here. */
 async function notifyOrder(_record: {
   orderRef: string
   input: OrderInput

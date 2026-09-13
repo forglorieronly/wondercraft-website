@@ -1,12 +1,23 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
+export function isSupabaseConfigured(): boolean {
+  return Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim(),
+  )
+}
+
 /**
  * Server-side Supabase client for App Router server components and route
  * handlers. Reads the auth session from cookies so server-rendered pages can
  * check whether the visitor is signed in.
  */
 export async function createClient() {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase public credentials are not configured')
+  }
+
   const cookieStore = await cookies()
 
   return createServerClient(

@@ -78,6 +78,56 @@ export async function calculateShipping(input: QuoteInput): Promise<ShippingQuot
   return { shipping: resolvePrice(response), quoteId }
 }
 
+export type CreatedShipment = {
+  shipmentNumber: string
+  pdfUrl: string | null
+}
+
+/**
+ * Create a real Econt label. Call only after Stripe has marked the order paid.
+ * Never from the public order route — that would ship unpaid carts.
+ */
+export async function createShipment(input: QuoteInput): Promise<CreatedShipment> {
+  const parcel = input.plan.parcel
+
+  if (!isParcelConfigured(parcel)) {
+    throw new EcontError(
+      'config',
+      `Parcel dimensions for plan "${input.plan.id}" are not configured (see PACKED_PARCEL in lib/data/pricing.ts)`,
+      { detail: { parcel } },
+    )
+  }
+
+  if (input.delivery.type === 'aps' && !canFitInAps(parcel)) {
+    throw new EcontError(
+      'validation',
+      'Пратката е твърде голяма за автомат на Еконт.',
+      { field: 'deliveryType' },
+    )
+  }
+
+  const config = getEcontConfig()
+  assertSenderConfigured(config)
+
+  const label = buildLabel(input, config.sender)
+  const response = await econtPost<CreateLabelRequest, CreateLabelResponse>(
+    'Shipments/LabelService.createLabel.json',
+    { label, mode: 'create' },
+  )
+
+  const shipmentNumber = response.label?.shipmentNumber?.trim()
+  if (!shipmentNumber) {
+    throw new EcontError('upstream', 'Econt created no shipment number', {
+      detail: response.label,
+    })
+  }
+
+  return {
+    shipmentNumber,
+    pdfUrl: response.label?.pdfURL?.trim() || null,
+  }
+}
+
 /**
  * Pull the number to charge out of Econt's response.
  *

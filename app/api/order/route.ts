@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
-import { getAppUrl, getStripe, randomIntegrationSuffix, toStripeAmount } from '@/lib/stripe'
+import { getAppUrl, getStripe, logStripeError, toStripeAmount } from '@/lib/stripe'
+import { getOrCreateStripeCustomer } from '@/lib/stripe-customer'
 import { getSupabaseAdmin } from '@/lib/supabase-admin'
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/server'
 import type { MoneyDto, OrderResponse } from '@/lib/econt/dto'
 import { isDeliveryType } from '@/lib/econt/dto'
 import { findCity, findOffice } from '@/lib/econt/nomenclatures'
@@ -15,16 +17,8 @@ export const runtime = 'nodejs'
 const MAX_BODY_BYTES = 8 * 1024
 
 /**
- * Place an order.
- *
- * Everything the browser sent is re-validated and re-priced here. That is not
- * belt-and-braces: the browser is where a customer's data is typed, not where it
- * is trusted, and the total shown to them was computed from a quote that may
- * have expired.
- *
- * This phase has no database and no payment — submitOrder logs the order and
- * returns a reference. The customer still gets the "we'll call you" flow the
- * shop already runs on.
+ * Place an order for the signed-in user: persist it, create a Stripe Customer
+ * if needed, then redirect to hosted Checkout (card, EUR).
  */
 export async function POST(request: Request) {
   const limited = rateLimitGuard(request, 'order')
@@ -34,6 +28,24 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { ok: false, message: 'Заявката е прекалено голяма.' },
       { status: 413 },
+    )
+  }
+
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json(
+      { ok: false, message: 'Моля, влезте в профила си, за да поръчате.' },
+      { status: 401 },
+    )
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user?.email) {
+    return NextResponse.json(
+      { ok: false, message: 'Моля, влезте в профила си, за да поръчате.' },
+      { status: 401 },
     )
   }
 
@@ -48,12 +60,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, message: 'Невалидна заявка.' }, { status: 400 })
   }
 
-  // The same validator the browser ran, so a bypassed client gets the same
-  // messages rather than a divergent second set.
+  const accountEmail = user.email.toLowerCase()
   const { errors, value } = validateOrder({
     firstName: String(draft.firstName ?? ''),
     lastName: String(draft.lastName ?? ''),
-    email: String(draft.email ?? ''),
+    email: accountEmail,
     phone: String(draft.phone ?? ''),
     planId: String(draft.planId ?? ''),
     printName: draft.printName,
@@ -82,12 +93,6 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Re-resolve against fresh nomenclature: an office the client cached may
-    // have closed or been renamed since. Better to ask the customer to pick
-    // again than to accept an order addressed to somewhere that no longer exists.
-    //
-    // But distinguish "Econt says this does not exist" from "Econt did not
-    // answer". Only the first is the customer's problem to fix.
     let city: CityDto | null = null
     let office: OfficeDto | null = null
 
@@ -116,14 +121,15 @@ export async function POST(request: Request) {
         }
       }
     } catch (error) {
-      // Econt is down. Accept the order anyway with the destination unverified:
-      // the customer chose from a list that was valid when the page loaded, and
-      // every order is confirmed by phone regardless. Turning them away because
-      // a third party is unavailable loses the sale for nothing.
       logFailure(error)
       city = null
       office = null
     }
+
+    const stripeCustomerId = await getOrCreateStripeCustomer({
+      userId: user.id,
+      email: accountEmail,
+    })
 
     const context: OrderContext = {
       city,
@@ -132,13 +138,29 @@ export async function POST(request: Request) {
       rawOfficeCode: value.delivery.officeCode ?? null,
     }
 
-    const accepted = await submitOrder(value, context)
+    const accepted = await submitOrder(value, context, {
+      userId: user.id,
+      stripeCustomerId,
+    })
+    // Econt could not price the shipment. Opening Checkout here would charge the
+    // product price with no delivery on it, so refuse — the order is recorded as
+    // needs_quote and confirmed by phone instead.
+    if (!accepted.shipping) {
+      return json({
+        ok: false,
+        message:
+          'Не успяхме да изчислим цената на доставката, затова не можем да продължим към плащане. Записахме заявката ви и ще се свържем с вас по телефона.',
+      })
+    }
+
     const stripe = getStripe()
     const appUrl = getAppUrl(request)
     const session = await stripe.checkout.sessions.create(
       {
         mode: 'payment',
-        customer_email: value.email,
+        customer: stripeCustomerId,
+        payment_method_types: ['card'],
+        locale: 'bg',
         line_items: [
           {
             price_data: {
@@ -151,8 +173,15 @@ export async function POST(request: Request) {
         ],
         success_url: `${appUrl}/order/success?orderRef=${encodeURIComponent(accepted.orderRef)}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${appUrl}/order/cancel?orderRef=${encodeURIComponent(accepted.orderRef)}`,
-        metadata: { orderRef: accepted.orderRef, planId: value.planId },
-        integration_identifier: `wondercraft_checkout_${randomIntegrationSuffix()}`,
+        metadata: {
+          orderRef: accepted.orderRef,
+          planId: value.planId,
+          userId: user.id,
+        },
+        payment_intent_data: {
+          receipt_email: accountEmail,
+          metadata: { orderRef: accepted.orderRef, userId: user.id },
+        },
       },
       { idempotencyKey: `order_${accepted.orderRef}` },
     )
@@ -173,11 +202,10 @@ export async function POST(request: Request) {
       shipping: accepted.shipping ? toDto(accepted.shipping) : null,
     })
   } catch (error) {
+    logStripeError(error)
     logFailure(error)
     return json({
       ok: false,
-      // The order did not land, so do not imply it did. This is the one place a
-      // customer must be told to try again rather than reassured.
       message:
         'Нещо се обърка при изпращането. Опитайте отново или ни се обадете.',
     })

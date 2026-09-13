@@ -3,8 +3,8 @@
 // Deliberately hand-rolled rather than zod: the surface is a dozen simple
 // fields, the messages have to be Bulgarian anyway, and the client imports this
 // module, so a schema library's bytes would land in the bundle for no gain. The
-// one thing zod would genuinely earn — parsing untrusted webhook JSON — does not
-// exist yet. When Stripe webhooks arrive, reimplement behind these signatures.
+// one thing zod would genuinely earn — parsing untrusted webhook JSON — lives
+// in `app/api/stripe/webhook` instead.
 //
 // No React and no server-only imports here, on purpose: both sides run the same
 // code, so a client that skips validation gets the identical messages back.
