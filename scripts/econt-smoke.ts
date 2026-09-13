@@ -153,6 +153,40 @@ async function main(): Promise<void> {
       'an unmeasured parcel must fail as a config error',
     )
     console.log('econt-smoke: PACKED_PARCEL unmeasured — real plan asserted to fail closed')
+  } else {
+    // The numbers have landed, so the assertion inverts: the real plan must now
+    // price for real. This is the coverage that proves the measurements reach
+    // Econt, rather than the synthetic parcel below standing in for them.
+    const realQuote = await calculateShipping({
+      plan,
+      city: sofia,
+      office: mladost,
+      delivery: { type: 'office', cityId: SOFIA, officeCode: '1010' },
+      receiver,
+    })
+    assert.ok(realQuote.shipping.cents > 0, 'the measured plan must carry a price')
+
+    // 90x60x20 is well past a locker, so the automat must be refused before
+    // Econt is asked — the same rule the modal greys the option out on.
+    assert.equal(canFitInAps(plan.parcel), false, 'the packed box must not fit a locker')
+    await assert.rejects(
+      () =>
+        calculateShipping({
+          plan,
+          city: sofia,
+          office: mladost,
+          delivery: { type: 'aps', cityId: SOFIA, officeCode: '1013' },
+          receiver,
+        }),
+      (err: unknown) => {
+        assert.ok(isEcontError(err) && err.kind === 'validation')
+        return true
+      },
+      'the measured plan must be refused for an automat',
+    )
+    console.log(
+      `econt-smoke: PACKED_PARCEL measured — office ${formatMoney(realQuote.shipping)}, automat refused`,
+    )
   }
 
   // The pricing paths themselves are exercised against a deliberately synthetic

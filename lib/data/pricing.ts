@@ -18,21 +18,27 @@ export type Parcel = {
 }
 
 // ============================================================================
-// TODO(owner): replace with values measured off a real packed (flat-pack) box.
-// Econt charges by weight and by volumetric weight, so wrong numbers here mean
-// wrong delivery prices at checkout — quoted too low, absorbed by us.
+// Measured off a real packed (flat-pack) box.
 //
-//   Measured by: ______________  on: ____________
+//   Measured by: owner            on: 2026-09-13
+//
+// Econt charges by weight AND by volumetric weight, so re-measure here if the
+// packaging changes — wrong numbers mean wrong delivery prices at checkout,
+// quoted too low and absorbed by us.
+//
+// At 90x60x20 this exceeds the automat limits in lib/econt/constraints.ts, so
+// canFitInAps() is false and the "Автомат" option greys itself out. That is
+// intended, not a regression.
 //
 // Until every field is > 0, isParcelConfigured() returns false and the delivery
 // quote fails loudly (see lib/econt/shipping.ts) instead of sending weight: 0
 // to Econt and undercharging every order.
 // ============================================================================
 export const PACKED_PARCEL: Parcel = {
-  weightKg: 0, // TODO
-  lengthCm: 0, // TODO
-  widthCm: 0, // TODO
-  heightCm: 0, // TODO
+  weightKg: 5,
+  lengthCm: 90,
+  widthCm: 60,
+  heightCm: 20,
 }
 
 export function isParcelConfigured(parcel: Parcel = PACKED_PARCEL): boolean {
