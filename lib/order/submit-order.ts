@@ -65,10 +65,13 @@ export async function submitOrder(
     streetIsFreeform: input.delivery.streetIsFreeform,
   }
 
-  // Recompute rather than trust the browser's total. If Econt is unreachable the
-  // order still goes through with the delivery price unset — this business
-  // already confirms every order by phone, so refusing the sale because a third
-  // party is down would lose a customer for nothing.
+  // Recompute rather than trust the browser's total.
+  //
+  // A failure here leaves shipping null, and the route refuses to open Checkout
+  // on that. This used to charge the product price alone and silently absorb the
+  // courier cost on every order — which is the one way to lose more than the
+  // sale. The order is still recorded (as needs_quote) so the shop can call with
+  // a price, so the sale is deferred rather than turned away.
   let shipping: Money | null = null
   let quoteId: string | null = null
   if (context.city) {
@@ -139,6 +142,10 @@ async function persistOrder(record: {
     shipping_amount: record.shipping?.cents ?? null,
     total_amount: record.total.cents,
     currency: 'eur',
+    // An unpriced shipment never reaches Stripe (see app/api/order/route.ts), so
+    // it must not sit in the queue looking like an order awaiting payment. The
+    // lead is still worth keeping — someone has to ring them back with a price.
+    status: record.shipping ? 'pending_payment' : 'needs_quote',
   })
   if (error) throw new Error(`Could not persist order: ${error.message}`)
 }

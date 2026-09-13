@@ -142,6 +142,17 @@ export async function POST(request: Request) {
       userId: user.id,
       stripeCustomerId,
     })
+    // Econt could not price the shipment. Opening Checkout here would charge the
+    // product price with no delivery on it, so refuse — the order is recorded as
+    // needs_quote and confirmed by phone instead.
+    if (!accepted.shipping) {
+      return json({
+        ok: false,
+        message:
+          'Не успяхме да изчислим цената на доставката, затова не можем да продължим към плащане. Записахме заявката ви и ще се свържем с вас по телефона.',
+      })
+    }
+
     const stripe = getStripe()
     const appUrl = getAppUrl(request)
     const session = await stripe.checkout.sessions.create(
